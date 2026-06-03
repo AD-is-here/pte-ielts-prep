@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { supabase, isMockMode } from '@/lib/supabaseClient';
 import Navbar from '@/components/Navbar';
 import Link from 'next/link';
 
@@ -22,6 +22,23 @@ export default function DashboardPage() {
   const [editExam, setEditExam] = useState('PTE');
   const [editScore, setEditScore] = useState(79);
   const [isUpdating, setIsUpdating] = useState(false);
+
+  const handleExportMockData = () => {
+    const keys = ['mock_user', 'mock_session', 'mock_profiles', 'mock_test_sessions', 'mock_test_responses', 'mock_vocabulary_items'];
+    const backup: Record<string, any> = {};
+    keys.forEach(k => {
+      const val = localStorage.getItem(k);
+      if (val) backup[k] = JSON.parse(val);
+    });
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backup, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", "auraprep_mock_data_backup.json");
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
 
   useEffect(() => {
     supabase.auth.getUser().then((res: any) => {
@@ -164,6 +181,27 @@ export default function DashboardPage() {
           <div>
             <h1 style={{ fontSize: '2.25rem', fontWeight: 800 }}>Welcome, {profile?.full_name}!</h1>
             <p style={{ color: 'var(--text-secondary)' }}>Track your daily practice sessions and improve with instant AI insights.</p>
+            {isMockMode && (
+              <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '0.7rem', background: 'rgba(234, 179, 8, 0.15)', color: '#eab308', padding: '3px 10px', borderRadius: '12px', border: '1px solid rgba(234,179,8,0.2)', fontWeight: 600 }}>
+                  ⚠️ Local Mock Mode
+                </span>
+                <button 
+                  onClick={handleExportMockData}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--primary)',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                    textDecoration: 'underline',
+                    padding: 0
+                  }}
+                >
+                  Download Local Backup (JSON)
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Target Preferences Widget */}
