@@ -6,49 +6,14 @@ import { supabase } from '@/lib/supabaseClient';
 import Navbar from '@/components/Navbar';
 import Link from 'next/link';
 
-// Sample writing prompts
-const PROMPTS = {
-  PTE: [
-    {
-      title: "Workplace Skills vs. General Knowledge",
-      prompt: "Some people believe that universities should focus on providing graduates with practical knowledge and skills needed for the workplace. Others argue that the true purpose of a university education should be to acquire knowledge for its own sake, regardless of career utility. Discuss both views and give your own opinion.",
-      minWords: 200,
-      maxWords: 300,
-      timeMinutes: 20
-    },
-    {
-      title: "Environmental Tax Responsibility",
-      prompt: "Should large companies be forced to pay an environmental tax because of the pollution they produce, or should governments provide financial incentives to companies that implement eco-friendly operations? Discuss both sides and present your views.",
-      minWords: 200,
-      maxWords: 300,
-      timeMinutes: 20
-    }
-  ],
-  IELTS: [
-    {
-      title: "Impact of Advertising on Society",
-      prompt: "Today, the high volume of advertisements has a major influence on our lives. Some people argue that advertising is useful for consumers because it introduces new products, while others believe it creates artificial needs and causes financial strain. Discuss both views and give your opinion. Write at least 250 words.",
-      minWords: 250,
-      maxWords: 500,
-      timeMinutes: 40
-    },
-    {
-      title: "Urbanization & Traffic Congestion",
-      prompt: "As cities grow, traffic congestion becomes a severe issue. Some governments suggest that building more roads is the best solution, while others argue that improving public transport infrastructures is a more sustainable approach. Discuss both views and give your opinion. Write at least 250 words.",
-      minWords: 250,
-      maxWords: 500,
-      timeMinutes: 40
-    }
-  ]
-};
-
 function WritingPracticeContent() {
   const searchParams = useSearchParams();
   const exam = searchParams.get('exam') || 'PTE';
   
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
+  const [promptLoading, setPromptLoading] = useState(true);
+  const [currentPrompt, setCurrentPrompt] = useState<any>(null);
   
   // Editor state
   const [text, setText] = useState('');
@@ -60,8 +25,18 @@ function WritingPracticeContent() {
   // Evaluation feedback
   const [feedback, setFeedback] = useState<any>(null);
 
-  const activePrompts = exam === 'PTE' ? PROMPTS.PTE : PROMPTS.IELTS;
-  const currentPrompt = activePrompts[currentPromptIndex] || activePrompts[0];
+  const fetchPrompt = async (examType: string) => {
+    setPromptLoading(true);
+    try {
+      const res = await fetch(`/api/generate-prompt?exam=${examType}&type=essay`);
+      const data = await res.json();
+      setCurrentPrompt(data);
+    } catch (err) {
+      console.error('Failed to fetch writing prompt', err);
+    } finally {
+      setPromptLoading(false);
+    }
+  };
 
   useEffect(() => {
     supabase.auth.getUser().then((res: any) => {
@@ -75,6 +50,13 @@ function WritingPracticeContent() {
     });
   }, []);
 
+  // Fetch a new prompt whenever the exam search param changes
+  useEffect(() => {
+    if (user) {
+      fetchPrompt(exam);
+    }
+  }, [user, exam]);
+
   // Initialize timer when prompt changes
   useEffect(() => {
     if (currentPrompt) {
@@ -85,7 +67,7 @@ function WritingPracticeContent() {
       setState('idle');
       setFeedback(null);
     }
-  }, [currentPromptIndex, exam]);
+  }, [currentPrompt]);
 
   // Timer Tick
   useEffect(() => {
@@ -126,11 +108,11 @@ function WritingPracticeContent() {
   };
 
   const handleNextPrompt = () => {
-    const nextIdx = (currentPromptIndex + 1) % activePrompts.length;
-    setCurrentPromptIndex(nextIdx);
+    fetchPrompt(exam);
   };
 
   const handleSubmitEssay = async () => {
+    if (!currentPrompt) return;
     setTimerActive(false);
     setState('grading');
 
@@ -165,7 +147,7 @@ function WritingPracticeContent() {
   };
 
   const saveAttemptToDatabase = async (evalData: any) => {
-    if (!user) return;
+    if (!user || !currentPrompt) return;
     try {
       // Create session
       const { data: sessionData, error: sessionErr } = await supabase
@@ -245,7 +227,7 @@ function WritingPracticeContent() {
             </h1>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Grades grammar, lexical vocabulary, coherence, and structure.</p>
           </div>
-          <button onClick={handleNextPrompt} className="secondary-btn" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
+          <button onClick={handleNextPrompt} disabled={promptLoading} className="secondary-btn" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
             🔄 Next Prompt
           </button>
         </div>
@@ -262,28 +244,39 @@ function WritingPracticeContent() {
             
             {/* Prompt */}
             <div className="glass-panel" style={{ padding: '24px' }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', display: 'block', marginBottom: '8px' }}>
-                Question Topic: {currentPrompt.title}
-              </span>
-              <p style={{ fontSize: '1.1rem', color: 'var(--text-primary)', lineHeight: '1.6', fontWeight: 500 }}>
-                {currentPrompt.prompt}
-              </p>
-              
-              <div style={{
-                display: 'flex',
-                gap: '16px',
-                marginTop: '16px',
-                fontSize: '0.8rem',
-                color: 'var(--text-secondary)',
-                borderTop: '1px solid var(--border-color)',
-                paddingTop: '16px'
-              }}>
-                <span>🕒 Limit: <strong>{currentPrompt.timeMinutes} Minutes</strong></span>
-                <span>📏 Target: <strong>{currentPrompt.minWords}-{currentPrompt.maxWords} Words</strong></span>
-              </div>
+              {promptLoading ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0' }}>
+                  <div style={{ width: '18px', height: '18px', borderRadius: '50%', border: '2px solid var(--border-color)', borderTopColor: 'var(--primary)', animation: 'spin 1s linear infinite' }} />
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Drafting essay question...</span>
+                </div>
+              ) : currentPrompt ? (
+                <>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', display: 'block', marginBottom: '8px' }}>
+                    Question Topic: {currentPrompt.title}
+                  </span>
+                  <p style={{ fontSize: '1.1rem', color: 'var(--text-primary)', lineHeight: '1.6', fontWeight: 500 }}>
+                    {currentPrompt.prompt}
+                  </p>
+                  
+                  <div style={{
+                    display: 'flex',
+                    gap: '16px',
+                    marginTop: '16px',
+                    fontSize: '0.8rem',
+                    color: 'var(--text-secondary)',
+                    borderTop: '1px solid var(--border-color)',
+                    paddingTop: '16px'
+                  }}>
+                    <span>🕒 Limit: <strong>{currentPrompt.timeMinutes} Minutes</strong></span>
+                    <span>📏 Target: <strong>{currentPrompt.minWords}-{currentPrompt.maxWords} Words</strong></span>
+                  </div>
+                </>
+              ) : (
+                <span style={{ color: 'var(--error)' }}>Failed to load essay prompt.</span>
+              )}
             </div>
 
-            {state !== 'graded' && (
+            {state !== 'graded' && currentPrompt && !promptLoading && (
               <>
                 {/* Editor Workspace */}
                 <div className="glass-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -365,7 +358,7 @@ function WritingPracticeContent() {
           </div>
 
           {/* RIGHT: Graded Score Dashboard Display */}
-          {state === 'graded' && feedback && (
+          {state === 'graded' && feedback && currentPrompt && (
             <div className="anim-slide-up" style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
               
               {/* Score summary panel */}

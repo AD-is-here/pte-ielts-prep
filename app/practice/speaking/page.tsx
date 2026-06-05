@@ -7,44 +7,6 @@ import Navbar from '@/components/Navbar';
 import AudioRecorder from '@/components/AudioRecorder';
 import Link from 'next/link';
 
-// Sample prompts dictionary
-const PROMPTS = {
-  PTE: {
-    'read-aloud': [
-      "Photography is a beautiful medium of expression. It allows us to capture fleeting moments in time and turn them into permanent records of memory. However, the rise of digital editing software has created debate over the authenticity of modern photojournalism.",
-      "The invention of the printing press was a pivotal moment in human history. It democratized access to information, allowing literature to spread rapidly across continents. This sparked scientific revolutions and laid the foundation for the modern intellectual age.",
-      "Climate change remains the defining ecological challenge of our generation. Rising atmospheric temperatures are causing glaciers to melt and ocean currents to shift. Governments must coordinate globally to implement sustainable energy infrastructures."
-    ],
-    'repeat-sentence': [
-      "The library will remain closed on Sunday due to scheduled building maintenance.",
-      "Please submit your final chemistry laboratory reports before Friday afternoon.",
-      "Successful entrepreneurs need to adapt quickly to changing consumer demands."
-    ]
-  },
-  IELTS: {
-    'cue-card': [
-      {
-        topic: "Describe a public park or garden you enjoy visiting.",
-        bulletPoints: [
-          "Where this park or garden is located",
-          "What you can see and do there",
-          "How often you visit it",
-          "And explain why you enjoy visiting this park or garden."
-        ]
-      },
-      {
-        topic: "Describe a piece of technology that you find extremely useful in your daily life.",
-        bulletPoints: [
-          "What the technology is",
-          "How long you have been using it",
-          "What main tasks you perform with it",
-          "And explain why you find it so essential to your routine."
-        ]
-      }
-    ]
-  }
-};
-
 function SpeakingPracticeContent() {
   const searchParams = useSearchParams();
   const exam = searchParams.get('exam') || 'PTE';
@@ -52,13 +14,27 @@ function SpeakingPracticeContent() {
 
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [currentPromptIndex, setCurrentPromptIndex] = useState(0);
+  const [promptLoading, setPromptLoading] = useState(true);
+  const [currentPrompt, setCurrentPrompt] = useState<any>(null);
   const [state, setState] = useState<'idle' | 'recording' | 'evaluating' | 'graded'>('idle');
   const [audioFile, setAudioFile] = useState<Blob | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   
   // Feedback results
   const [feedback, setFeedback] = useState<any>(null);
+
+  const fetchPrompt = async (examType: string, taskType: string) => {
+    setPromptLoading(true);
+    try {
+      const res = await fetch(`/api/generate-prompt?exam=${examType}&type=${taskType}`);
+      const data = await res.json();
+      setCurrentPrompt(data);
+    } catch (err) {
+      console.error('Failed to fetch speaking prompt', err);
+    } finally {
+      setPromptLoading(false);
+    }
+  };
 
   useEffect(() => {
     supabase.auth.getUser().then((res: any) => {
@@ -72,15 +48,20 @@ function SpeakingPracticeContent() {
     });
   }, []);
 
+  // Fetch a new prompt whenever the exam or type URL search params change
+  useEffect(() => {
+    if (user) {
+      fetchPrompt(exam, type);
+    }
+  }, [user, exam, type]);
+
   const getPromptText = () => {
+    if (!currentPrompt) return '';
     if (exam === 'PTE') {
-      const prompts = PROMPTS.PTE[type as 'read-aloud' | 'repeat-sentence'] || [];
-      return prompts[currentPromptIndex] || '';
+      return currentPrompt.text || '';
     } else {
-      const cueCards = PROMPTS.IELTS['cue-card'] || [];
-      const card = cueCards[currentPromptIndex];
-      if (!card) return '';
-      return `${card.topic}\n\n` + card.bulletPoints.map(bp => `• ${bp}`).join('\n');
+      // IELTS cue-card
+      return `${currentPrompt.topic}\n\n` + (currentPrompt.bulletPoints || []).map((bp: string) => `• ${bp}`).join('\n');
     }
   };
 
@@ -103,10 +84,7 @@ function SpeakingPracticeContent() {
     setFeedback(null);
     setAudioFile(null);
     setAudioUrl(null);
-    const maxPrompts = exam === 'PTE' 
-      ? (PROMPTS.PTE[type as 'read-aloud' | 'repeat-sentence'] || []).length 
-      : (PROMPTS.IELTS['cue-card'] || []).length;
-    setCurrentPromptIndex((prev) => (prev + 1) % maxPrompts);
+    fetchPrompt(exam, type);
   };
 
   const handleRecordingStop = async (blob: Blob, url: string, transcript?: string) => {
@@ -239,7 +217,7 @@ function SpeakingPracticeContent() {
             </h1>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Focus on pronunciation, stress, and natural pace.</p>
           </div>
-          <button onClick={handleNextPrompt} className="secondary-btn" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
+          <button onClick={handleNextPrompt} disabled={promptLoading} className="secondary-btn" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
             🔄 Next Prompt
           </button>
         </div>
@@ -250,7 +228,7 @@ function SpeakingPracticeContent() {
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Speaking Prompt
             </span>
-            {isPTE && type === 'repeat-sentence' && (
+            {isPTE && type === 'repeat-sentence' && !promptLoading && (
               <button 
                 onClick={speakPrompt}
                 style={{
@@ -271,7 +249,12 @@ function SpeakingPracticeContent() {
             )}
           </div>
 
-          {exam === 'PTE' ? (
+          {promptLoading ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '16px 0' }}>
+              <div style={{ width: '20px', height: '20px', borderRadius: '50%', border: '2px solid var(--border-color)', borderTopColor: 'var(--primary)', animation: 'spin 1s linear infinite' }} />
+              <span style={{ color: 'var(--text-secondary)', fontSize: '1rem' }}>Drafting fresh prompt...</span>
+            </div>
+          ) : exam === 'PTE' ? (
             <p style={{
               fontSize: '1.25rem',
               lineHeight: '1.8',
@@ -288,7 +271,7 @@ function SpeakingPracticeContent() {
                 {promptText.split('\n\n')[0]}
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {promptText.split('\n\n')[1]?.split('\n').map((line, idx) => (
+                {promptText.split('\n\n')[1]?.split('\n').map((line: string, idx: number) => (
                   <p key={idx} style={{ color: 'var(--text-secondary)', fontSize: '1rem' }}>{line}</p>
                 ))}
               </div>
@@ -297,7 +280,7 @@ function SpeakingPracticeContent() {
         </div>
 
         {/* Recorder interface */}
-        <div style={{ display: (state === 'idle' || state === 'recording') ? 'block' : 'none', width: '100%' }}>
+        <div style={{ display: (state === 'idle' || state === 'recording') && !promptLoading ? 'block' : 'none', width: '100%' }}>
           <AudioRecorder 
             onStart={() => setState('recording')}
             onStop={handleRecordingStop} 
@@ -438,6 +421,11 @@ function SpeakingPracticeContent() {
         )}
 
       </div>
+      <style jsx global>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </>
   );
 }

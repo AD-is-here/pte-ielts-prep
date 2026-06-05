@@ -6,58 +6,15 @@ import { supabase } from '@/lib/supabaseClient';
 import Navbar from '@/components/Navbar';
 import Link from 'next/link';
 
-// Sample reading tasks
-const TASKS = {
-  PTE: [
-    {
-      title: "The Physics of Rain",
-      text: "Rain is liquid water in the form of droplets that have [1] from atmospheric water vapor and then become heavy enough to fall under gravity. Rain is a major component of the water cycle and is [2] for depositing most of the fresh water on the Earth. It provides [3] conditions for many types of ecosystems, as well as water for hydroelectric power plants and crop irrigation.",
-      blanks: {
-        1: { correct: "condensed", options: ["condensed", "evaporated", "frozen", "dissolved"] },
-        2: { correct: "responsible", options: ["responsible", "accused", "damaging", "unnecessary"] },
-        3: { correct: "suitable", options: ["suitable", "hostile", "barren", "extreme"] }
-      }
-    }
-  ],
-  IELTS: [
-    {
-      title: "Rise of Renewable Energy",
-      passage: "Renewable energy technologies are clean sources of energy that have a much lower environmental impact than conventional energy technologies. Over the past decade, solar panels and wind turbines have experienced unprecedented cost declines. These cost reductions have been driven by government subsidies, manufacturing scaling, and incremental engineering refinements. While fossil fuels still dominate global power generation, the grid share of wind and solar is climbing exponentially. However, grid integration remains a technical hurdle due to the intermittent nature of solar and wind generation, requiring advanced storage batteries or grid modernization.",
-      questions: [
-        {
-          id: 1,
-          q: "What has been the primary driver of cost declines in solar panels and wind turbines over the past decade?",
-          options: [
-            "Increased reliance on coal and natural gas.",
-            "Government subsidies, scaling, and engineering refinements.",
-            "A global decline in electricity consumption.",
-            "The rising cost of lithium-ion batteries."
-          ],
-          correctIdx: 1
-        },
-        {
-          id: 2,
-          q: "What is the main technical hurdle currently facing wind and solar grid integration?",
-          options: [
-            "High maintenance costs of turbines.",
-            "The intermittent nature of generation.",
-            "Lack of interest from private investors.",
-            "Lack of clean energy standards."
-          ],
-          correctIdx: 1
-        }
-      ]
-    }
-  ]
-};
-
 function ReadingPracticeContent() {
   const searchParams = useSearchParams();
   const exam = searchParams.get('exam') || 'PTE';
+  const type = searchParams.get('type') || 'fill-blanks';
   
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
+  const [promptLoading, setPromptLoading] = useState(true);
+  const [currentTask, setCurrentTask] = useState<any>(null);
   
   // Quiz states
   const [pteSelections, setPteSelections] = useState<Record<number, string>>({});
@@ -75,8 +32,18 @@ function ReadingPracticeContent() {
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const activeTasks = exam === 'PTE' ? TASKS.PTE : TASKS.IELTS;
-  const currentTask = activeTasks[currentTaskIndex] || activeTasks[0];
+  const fetchTask = async (examType: string, taskType: string) => {
+    setPromptLoading(true);
+    try {
+      const res = await fetch(`/api/generate-prompt?exam=${examType}&type=${taskType}`);
+      const data = await res.json();
+      setCurrentTask(data);
+    } catch (err) {
+      console.error('Failed to fetch reading task', err);
+    } finally {
+      setPromptLoading(false);
+    }
+  };
 
   useEffect(() => {
     supabase.auth.getUser().then((res: any) => {
@@ -90,15 +57,22 @@ function ReadingPracticeContent() {
     });
   }, []);
 
+  // Fetch task on user load and parameter changes
   useEffect(() => {
-    // Reset states when task changes
+    if (user) {
+      fetchTask(exam, type);
+    }
+  }, [user, exam, type]);
+
+  useEffect(() => {
+    // Reset states when currentTask changes
     setPteSelections({});
     setIeltsSelections({});
     setState('idle');
     setScore(0);
     setTooltipPos(null);
     setSelectedWord('');
-  }, [currentTaskIndex, exam]);
+  }, [currentTask]);
 
   // Click outside to dismiss tooltip
   useEffect(() => {
@@ -170,11 +144,12 @@ function ReadingPracticeContent() {
   };
 
   const checkAnswers = () => {
+    if (!currentTask) return;
     let correctCount = 0;
     let questionsCount = 0;
 
     if (exam === 'PTE') {
-      const blanks = (currentTask as any).blanks;
+      const blanks = currentTask.blanks || {};
       questionsCount = Object.keys(blanks).length;
       Object.keys(blanks).forEach((key) => {
         const id = Number(key);
@@ -183,7 +158,7 @@ function ReadingPracticeContent() {
         }
       });
     } else {
-      const questions = (currentTask as any).questions;
+      const questions = currentTask.questions || [];
       questionsCount = questions.length;
       questions.forEach((q: any) => {
         if (ieltsSelections[q.id] === q.correctIdx) {
@@ -196,15 +171,15 @@ function ReadingPracticeContent() {
     setTotalQuestions(questionsCount);
     setState('graded');
 
-    // Save attempt to DB (overallScore maps to percentage for standardized stats)
+    // Save attempt to DB
     const overallScore = questionsCount > 0 
       ? Math.round((correctCount / questionsCount) * (exam === 'PTE' ? 90 : 9) * 10) / 10 
       : 0;
-    saveAttemptToDatabase(overallScore);
+    saveAttemptToDatabase(overallScore, correctCount, questionsCount);
   };
 
-  const saveAttemptToDatabase = async (overallScore: number) => {
-    if (!user) return;
+  const saveAttemptToDatabase = async (overallScore: number, correct: number, total: number) => {
+    if (!user || !currentTask) return;
     try {
       const { data: sessionData, error: sessionErr } = await supabase
         .from('test_sessions')
@@ -236,7 +211,7 @@ function ReadingPracticeContent() {
             session_id: sessionId,
             question_type: exam === 'PTE' ? 'Fill in the Blanks' : 'Academic Reading Passage',
             question_prompt: currentTask.title,
-            ai_evaluation: { score, totalQuestions, exam, selections: exam === 'PTE' ? pteSelections : ieltsSelections },
+            ai_evaluation: { score: correct, totalQuestions: total, exam, selections: exam === 'PTE' ? pteSelections : ieltsSelections },
             score: overallScore,
           });
       }
@@ -246,13 +221,13 @@ function ReadingPracticeContent() {
   };
 
   const handleNextPrompt = () => {
-    const nextIdx = (currentTaskIndex + 1) % activeTasks.length;
-    setCurrentTaskIndex(nextIdx);
+    fetchTask(exam, type);
   };
 
   const renderPteText = () => {
-    const text = (currentTask as any).text || '';
-    const blanks = (currentTask as any).blanks || {};
+    if (!currentTask) return null;
+    const text = currentTask.text || '';
+    const blanks = currentTask.blanks || {};
     
     // Split text by blank tags e.g., [1]
     const parts = text.split(/(\[\d+\])/g);
@@ -262,6 +237,8 @@ function ReadingPracticeContent() {
       if (match) {
         const blankId = Number(match[1]);
         const blankInfo = blanks[blankId];
+        if (!blankInfo) return <span key={idx}>{part}</span>;
+        
         const isGraded = state === 'graded';
         const isCorrect = pteSelections[blankId] === blankInfo.correct;
         
@@ -346,7 +323,7 @@ function ReadingPracticeContent() {
               Double-click any unfamiliar word in the text to trigger an immediate AI definition lookup.
             </p>
           </div>
-          <button onClick={handleNextPrompt} className="secondary-btn" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
+          <button onClick={handleNextPrompt} disabled={promptLoading} className="secondary-btn" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
             🔄 Next Task
           </button>
         </div>
@@ -361,25 +338,36 @@ function ReadingPracticeContent() {
           
           {/* LEFT: Text passage / blank selectors */}
           <div className="glass-panel" style={{ padding: '32px' }} onDoubleClick={handleTextDoubleClick}>
-            <h3 style={{ fontSize: '1.25rem', marginBottom: '16px', color: 'var(--text-primary)', fontWeight: 700 }}>
-              📖 {currentTask.title}
-            </h3>
-
-            {isPTE ? (
-              <div style={{ fontSize: '1.15rem', lineHeight: '2', color: 'var(--text-secondary)' }}>
-                {renderPteText()}
+            {promptLoading ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '24px 0' }}>
+                <div style={{ width: '20px', height: '20px', borderRadius: '50%', border: '3px solid var(--border-color)', borderTopColor: 'var(--primary)', animation: 'spin 1s linear infinite' }} />
+                <span style={{ color: 'var(--text-secondary)', fontSize: '1rem' }}>Drafting reading task...</span>
               </div>
+            ) : currentTask ? (
+              <>
+                <h3 style={{ fontSize: '1.25rem', marginBottom: '16px', color: 'var(--text-primary)', fontWeight: 700 }}>
+                  📖 {currentTask.title}
+                </h3>
+
+                {isPTE ? (
+                  <div style={{ fontSize: '1.15rem', lineHeight: '2', color: 'var(--text-secondary)' }}>
+                    {renderPteText()}
+                  </div>
+                ) : (
+                  <p style={{ fontSize: '1.05rem', lineHeight: '1.7', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+                    {currentTask.passage}
+                  </p>
+                )}
+              </>
             ) : (
-              <p style={{ fontSize: '1.05rem', lineHeight: '1.7', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
-                {(currentTask as any).passage}
-              </p>
+              <span style={{ color: 'var(--error)' }}>Failed to load reading task.</span>
             )}
           </div>
 
           {/* RIGHT: IELTS Questions (for IELTS only) */}
-          {!isPTE && (
+          {!isPTE && currentTask && !promptLoading && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              {(currentTask as any).questions.map((q: any) => {
+              {(currentTask.questions || []).map((q: any) => {
                 const isGraded = state === 'graded';
                 const isCorrect = ieltsSelections[q.id] === q.correctIdx;
 
@@ -435,48 +423,50 @@ function ReadingPracticeContent() {
         </div>
 
         {/* Grade actions */}
-        <div style={{ marginTop: '32px', display: 'flex', gap: '16px', alignItems: 'center' }}>
-          {state === 'idle' ? (
-            <button 
-              onClick={checkAnswers} 
-              className="glow-btn"
-              style={{ padding: '12px 28px' }}
-            >
-              Check Answers
-            </button>
-          ) : (
-            <div className="glass-card" style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '24px',
-              padding: '16px 24px',
-              width: '100%',
-              background: 'var(--bg-surface)'
-            }}>
-              <div>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Score Achieved</span>
-                <h3 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--primary)' }}>
-                  {score} / {totalQuestions} Correct ({Math.round((score / totalQuestions) * 100)}%)
-                </h3>
+        {!promptLoading && currentTask && (
+          <div style={{ marginTop: '32px', display: 'flex', gap: '16px', alignItems: 'center' }}>
+            {state === 'idle' ? (
+              <button 
+                onClick={checkAnswers} 
+                className="glow-btn"
+                style={{ padding: '12px 28px' }}
+              >
+                Check Answers
+              </button>
+            ) : (
+              <div className="glass-card" style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '24px',
+                padding: '16px 24px',
+                width: '100%',
+                background: 'var(--bg-surface)'
+              }}>
+                <div>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Score Achieved</span>
+                  <h3 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--primary)' }}>
+                    {score} / {totalQuestions} Correct ({totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0}%)
+                  </h3>
+                </div>
+                <div style={{ display: 'flex', gap: '12px', marginLeft: 'auto' }}>
+                  <button 
+                    onClick={() => {
+                      setState('idle');
+                      setPteSelections({});
+                      setIeltsSelections({});
+                    }}
+                    className="secondary-btn"
+                  >
+                    Try Again
+                  </button>
+                  <button onClick={handleNextPrompt} className="glow-btn">
+                    Next Task
+                  </button>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: '12px', marginLeft: 'auto' }}>
-                <button 
-                  onClick={() => {
-                    setState('idle');
-                    setPteSelections({});
-                    setIeltsSelections({});
-                  }}
-                  className="secondary-btn"
-                >
-                  Try Again
-                </button>
-                <button onClick={handleNextPrompt} className="glow-btn">
-                  Next Task
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* Vocabulary floating popup tooltip */}
         {tooltipPos && (
